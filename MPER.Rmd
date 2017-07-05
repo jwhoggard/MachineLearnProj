@@ -1,0 +1,107 @@
+---
+title: "Machine Prediction of Exercise Results"
+author: "John W. Hoggard"
+date: "7/4/2017"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Problem
+
+We have data regarding a variety of measures taken from sensors on a person's body
+while they performed an exercise, and a classification of whether the activity was 
+performed correctly or featuring one of four common errors.  The data was analyzed
+in a 2013 paper[^1] and is available at http://groupware.les.inf.puc-rio.br/har.
+The data includes a variable `classe` which contains a classification code (`A` through `E`) for how the exercise was performed.  Our task is to predict `classe`
+based off of the other available data.
+
+[^1]: Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. **Proceedings of 4th International Conference in Cooperation with SIGCHI** (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+## Importing and Cleaning Data
+
+Data for training was provided in a file `pml-training.csv`.  To begin the analysis, 
+we import the data:
+```{r, cache=TRUE}
+train.data <- read.table("pml-training.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+```
+We note that a large number of columns here are mostly blank or mostly filled with NAs.  Blank columns have imported as character type, so we eliminate these, and the columns that are mostly NA, but keep character values which we might use.  We also convert the variable `classe` (which contains the classification of how the exercise was completed) to a factor variable:
+```{r}
+keep <- !(sapply(train.data, class)=="character")
+keep[c("user_name", "cvtd_timestamp", "new_window", "classe")]<- TRUE
+train.data <- train.data[, keep]
+train.data <- train.data[,(sapply(train.data, function(x) {sum(is.na(x))}) < 19000)]
+train.data$classe<-as.factor(train.data$classe)
+```
+For cross-validation, we will select a subset of this data for training, and retain
+the remainder for testing at the end:
+```{r,message=FALSE}
+library(caret)
+inTrain<-createDataPartition(train.data$classe, p=.7, list=FALSE)
+trTrain <- train.data[inTrain,]
+trTest <- train.data[-inTrain,]
+```
+
+## Discriminant Analysis
+
+For predicting a factor variable like `classe`, we could attempt linear or quadratic 
+discriminant analysis.  On the training data `trTrain`, linear discriminant analysis is able to predict on all remaining variables with about 70% accuracy (in-sample error), but the more flexible Quadratic Discriminant Analysis is able to reach about 89% accuracy in-sample:
+```{r, cache=TRUE}
+modQDAS <- train(classe ~., method="qda", data=trTrain[,-c(1:7)])
+confusionMatrix(predict(modQDAS, trTest), trTest$classe)$overall[1]
+```
+(Here we exclude the first seven variables from consideration, as these include details such as the test case and the name of the subject which should not be used.) This is fairly good, despite the fact that examination of some of the variables suggests that the data is probably not normally distributed.
+
+## Tree Models
+
+Given the potentially non-linear nature of the prediction required, we consider a
+classification tree, and use `rpart` to create one:
+```{r, cache=TRUE}
+modTreeFit <- train(classe ~ ., method="rpart", data=trTrain[,-c(1:7)])
+confusionMatrix(predict(modTreeFit, trTrain), trTrain$classe)$overall[1]
+```
+Here, in-sample accuracty is only about 50%, so we choose to expand the tree model 
+to a random forest.  We move to bootstrapping via random forests to improve the predictive power of the model.
+
+An initial attempt achieves almost perfect accuracy on the training
+data, although it requires a very long running time:
+```{r, eval=FALSE}
+modRFs <- train(classe~., method="rf", data=trTrain[,-c(1:7)])
+predRFs <- predict(modRFs, trTrain)
+confusionMatrix(predRFs, trTrain$classe)$accuracy[1]
+```
+```{r Problem, echo=FALSE, message=FALSE}
+modRFs <- readRDS("/Users/jhoggard/Google Drive/Classes/Data Science/08 - Machine Learning/Project/modRFs")
+predRFs <- predict(modRFs, trTrain)
+levels(predRFs) <- c("A", "B", "C", "D", "E")
+confusionMatrix(predRFs, trTrain$classe)$accuracy[1]
+```
+The model defaults to using 500 trees.  However, checking the error rates versus number of trees, it appears we achieve most of the accuracy by the time we reach 50 trees:
+```{r}
+plot(modRFs$finalModel)
+```
+
+Reducing to 50 trees (to help avoid overfitting), and using repeated cross-validation with 10 folds, we repeat fitting of `classe` to other variables via a random forest, and still achieve about 99% accuracy on the training data.  The estimate of error based on out-of-bag error rate is 82%, but this is typically a low estimate.  The in-sample accuracy is very high again (about 99%):
+```{r, cache=TRUE}
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+mod50TreeRFs <- train(as.factor(classe)~., method="rf", data=trTrain[,-c(1:7)],
+                      ntree=50, metric="Accuracy", trControl=control)
+mod50TreeRFs$finalModel
+confusionMatrix(predict(mod50TreeRFs, trTest), trTest$classe)$overall[1]
+```
+
+## Conclusion and Accuracy
+
+Although the quadratic discriminant analysis appears to show high enough accuracy to be useful (at least in terms of in-sample error), the random forest shows more promise. (Also, the random forest does not require any assumptions about the form of the data.)  
+
+We finally check the out-of-sample error rate for our random forest model developed above using the test data we set aside at the start of the analysis:
+```{r, cache=TRUE}
+confusionMatrix(predict(mod50TreeRFs, trTest), trTest$classe)
+```
+Indeed, the out-of-sample error rate seems to be very small, with about 99% accuracy
+of the random forest model on the test data, giving an error rate of 1% or less.  This seems to have been a good choice for the model.
+
