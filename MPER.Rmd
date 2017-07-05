@@ -3,8 +3,8 @@ title: "Machine Prediction of Exercise Results"
 author: "John W. Hoggard"
 date: "7/4/2017"
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -105,3 +105,11 @@ confusionMatrix(predict(mod50TreeRFs, trTest), trTest$classe)
 Indeed, the out-of-sample error rate seems to be very small, with about 99% accuracy
 of the random forest model on the test data, giving an error rate of 1% or less.  This seems to have been a good choice for the model.
 
+## Quiz Prediction
+
+For the quiz, we also import the needed test data, and process (converting answers from numeric to letters A-E for convenience.)  Output supressed here.
+```{r, eval=FALSE}
+test.data <- read.table("pml-testing.csv", header=TRUE, sep=",", stringsAsFactors = FALSE)
+data.frame(ANS = c("A", "B", "C", "D", "E")[predict(mod50TreeRFs, test.data)])
+```
+The model correctly predicted all answers.
